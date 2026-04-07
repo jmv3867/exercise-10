@@ -1,0 +1,619 @@
+---
+title: "exercise-10"
+author: "Janny Mauricio Velasco Alban"
+format: html
+editor: visual
+---
+
+# Exercise 10
+
+## Libraries
+
+```{r}
+
+library(tidyverse)
+library(skimr)
+library(broom)
+library(infer)
+library(car)
+library(emmeans)
+library(sjPlot)
+```
+
+## Dataset
+
+```{r}
+
+f<- "https://raw.githubusercontent.com/difiore/ada-datasets/refs/heads/main/AVONETdataset1.csv"
+
+d<- read_csv(f, col_names = TRUE)
+
+view(d)
+names(d)
+```
+
+```{r}
+
+d<-d%>%
+  select(Species1, Family1, Order1, Beak.Length_Culmen, Beak.Width, Beak.Depth, Tarsus.Length, Wing.Length, Tail.Length, Mass, Habitat, Migration, Trophic.Level, Trophic.Niche, Min.Latitude, Max.Latitude, Centroid.Latitude, Primary.Lifestyle, Range.Size)
+
+cat("Dimensions:", dim(d), "\n")
+```
+
+## Let's go to the analysis
+
+### Skim
+
+```{r}
+
+# First lets skim the data
+
+skim(d)
+
+
+```
+
+### Challenge 1: One-factor ANOVA 
+
+#### Step 1
+
+-   Make boxplots of log(**Mass**) in relation to **Trophic.Level** and **Migration** behavior type. For each plot, drop from the visualization all species records where the categorical variable of interest is missing from the dataset. Also, you will want to convert the variable **Migration** (which is scored as a number: “1”, “2”, or “3”) from class numeric to either being classified as a factor or as a character (string) variable.
+
+```{r}
+
+#Step 1
+
+d<- d%>%
+  mutate(Migration = as.factor(Migration)) #Migration to factor
+
+# Boxplot: log(Mass) by Trophic Level
+
+d %>%
+  filter(!is.na(Trophic.Level))%>%
+  ggplot(aes(x = Trophic.Level, y = log(Mass), fill = Trophic.Level))+
+  geom_boxplot(alpha = 0.7, outlier.size = 0.8)+
+  labs(
+    title = "log(Mass) by Trophic Level",
+    x = "Trophic Level", 
+    y = "log(Mass)"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none")
+
+
+```
+
+```{r}
+
+#Boxplot: log(Mass) ~ Migration (drop NAs in Migration)
+
+d %>%
+  filter(!is.na(Migration))%>%
+  ggplot(aes(x = Migration, y = log(Mass), fill = Migration))+
+  geom_boxplot(alpha = 0.7, outlier.size = 0.8)+
+  labs(
+    title = "log(Mass) by Migration",
+    x = "Migration (1 = Sedentary, 2 = Partially Migratory, 3 = Migratory)", 
+    y = "log(Mass)"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none")
+```
+
+#### Step 2
+
+```{r}
+# Step 2
+## Run linear models using the lm() function to look at the relationship between log(Mass) and Trophic.Level and between log(Mass) and Migration.
+
+
+mA<- lm(log(Mass) ~ Trophic.Level, data = d %>%
+          filter(!is.na(Trophic.Level))
+        )
+summary(mA)
+
+### Examine the output of the resultant linear models. Is log(Mass) associated with either Trophic.Level or Migration category? That is, in the global test of significance, is the F statistic large enough to reject the null hypothesis of an F value of zero?
+
+
+mB<- lm(log(Mass) ~ Migration, data = d %>%
+          filter(!is.na(Migration))
+        )
+summary(mB)
+
+##Given the regression coefficients returned for your Migration model, which Migration categor(ies) are different than the reference level? What level is the reference level? Relevel and assess differences among the remaining pair of Migration categories.
+
+###Reference to 2 to assess the 1 vs 3 comparison
+
+d2 <- d %>%
+  filter(!is.na(Migration)) %>%
+  mutate(Migration = relevel(Migration, ref = "2"))
+
+mB2 <- lm(log(Mass) ~ Migration, data = d2)
+summary(mB2)
+
+###Reference to 3
+
+d3<- d %>%
+  filter(!is.na(Migration)) %>%
+  mutate(Migration = relevel(Migration, ref = "3"))
+
+mB3 <- lm(log(Mass) ~ Migration, data = d3)
+summary(mB3)
+
+
+```
+
+#### Step 3
+
+Conduct a post-hoc Tukey Honest Significant Differences test to also evaluate which **Migration** categories differ “significantly” from one another
+
+```{r}
+
+#Step 3: Post-hoc Tukey HSD - Migration
+
+mB_aov <- aov(log(Mass) ~ Migration, data = d %>%
+                filter(!is.na(Migration)))
+tukey_mig<- TukeyHSD(mB_aov, which = "Migration")
+tukey_mig
+plot(tukey_mig)+theme_minimal()
+
+
+```
+
+#### Step 4
+
+Use a permutation approach to inference to generate a null distribution of F statistic values for the model of log(**Mass**) in relation to **Trophic.Level** and calculate a p value for your original F statistic
+
+```{r}
+
+#Step 4: Permutation-Based F Test - log(Mass) ~ Trophic.Level
+
+d_trophic <- d %>%
+  filter(!is.na(Trophic.Level), !is.na(Mass)) %>%
+  mutate(logMass = log(Mass))
+
+obs_F_trophic <- d_trophic %>%
+  specify(logMass ~ Trophic.Level)%>%
+  calculate(stat = "F")
+
+cat("\nObserved F (logMass ~ Trophic.Level):", obs_F_trophic$stat, "\n")
+
+##Null distribution per permutation (1000 reps)
+
+set.seed(2026)
+null_dist_trophic <- d_trophic %>%
+  specify(logMass ~ Trophic.Level) %>%
+  hypothesise(null = "independence") %>%
+  generate(reps = 1000, type = "permute") %>%
+  calculate(stat = "F")
+
+##Permutation p-value
+
+p_perm_trophic <- null_dist_trophic %>%
+  get_p_value(obs_stat = obs_F_trophic, direction = "greater")
+
+cat("Permutation p-value:", p_perm_trophic$p_value, "\n")
+
+###Visualization
+
+visualize(null_dist_trophic)+
+  shade_p_value(obs_stat = obs_F_trophic, direction = "greater")+
+  labs(
+    title = "Permutation Null Distribution of F (logMass ~ Trophic.Level",
+    x = "F Statistic", 
+    y = "Count"
+  )+theme_minimal()
+```
+
+### Challenge 2: Data Wrangling plus One- and Two-Factor ANOVA
+
+#### Step 1
+
+Create the following two new variables and add them to AVONET dataset:
+
+```{r}
+
+#Residuals of log(Beak.Length_Culmen) ~ log(Mass) and residuals of log(Tarsus.Length) ~ log(Mass)
+
+d <- d%>%
+  mutate(
+    logMass = log(Mass), 
+    logBeak = log(Beak.Length_Culmen),
+    logTarsus = log(Tarsus.Length)
+  )
+
+## regression on complete cases
+
+beak_model <- lm(logBeak ~ logMass, data = d, na.action = na.exclude)
+tarsus_model <- lm(logTarsus ~ logMass, data = d, na.action = na.exclude)
+
+## Residuals as new columns 
+
+d<- d %>%
+  mutate(
+    relBeak = residuals(beak_model),
+    relTarsus = residuals(tarsus_model)
+  )
+
+cat("\nNew variables created: relBeak, relTarsus\n")
+glimpse(select(d, Species1, relBeak, relTarsus))
+
+```
+
+#### Step 2
+
+Make a boxplot or violin plot of your new relative tarsus length variable in relation to **Primary.Lifestyle** and of your new relative beak length variable in relation to **Trophic.Niche**
+
+```{r}
+
+#Boxplots - relTrasus ~ Primary.Lifestyle, relBeak ~ Trophic.Niche
+
+## Relative Tarsus ~ Primary.Lifestyle
+
+d %>% 
+  filter(!is.na(Primary.Lifestyle), !is.na(relTarsus)
+         
+         )%>%
+  ggplot(aes(x = Primary.Lifestyle, y = relTarsus, fill = Primary.Lifestyle))+
+  geom_violin(alpha = 0.5)+
+  geom_boxplot(width =0.15, alpha=0.8, outlier.size = 0.5)+
+  labs(
+    title="Relative Tarsus Length by Primary Lifesttyle",
+    x = "Primary Lifestyle",
+    y = "Relative Tarsus Length (residual)"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1))
+
+
+```
+
+```{r}
+
+## Relative Beak ~ Trophic.Niche
+
+d %>%
+  filter(!is.na(Trophic.Niche), !is.na(relBeak)) %>%
+  ggplot(aes(x = Trophic.Niche, y = relBeak, fill = Trophic.Niche))+
+  geom_violin(alpha = 0.5)+
+  geom_boxplot(width =0.15, alpha=0.8, outlier.size = 0.5)+
+  labs(
+    title="Relative Beak Length by Trophic Niche",
+    x = "Trophic Niche",
+    y = "Relative Beak Length (residual)"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+#### Step 3
+
+Run ANOVA analyses to look at the association between geographic range size and the variable **Migration**.
+
+```{r}
+
+#ANOVA ~ log(Range.Size) ~ Migration
+
+## Let's examine the distribution
+
+hist(d$Range.Size, breaks = 100, main = "Range.Size distribution")+theme_minimal()
+hist(log(d$Range.Size), breaks = 100, main = "Log(Range.Size) distribution")+theme_minimal()
+```
+
+```{r}
+
+d <- d %>%
+  mutate(logRS = log(Range.Size))
+
+d_mig <- d %>%
+  filter(!is.na(Migration), !is.na(logRS)) %>%
+  mutate(Migration = droplevels(as.factor(Migration)))
+```
+
+```{r}
+##Linear model: logRS ~ Migration (reference = "1)
+
+mC <- lm(logRS ~ Migration, data = d_mig)
+summary(mC)
+
+## R2 = proportion of variance in logRS by Migration
+
+cat("\nR2 (logRS ~ Migration):", round(summary(mC)$r.squared, 4), "\n")
+```
+
+```{r}
+
+##Let's check the Migration2 and Migration3 coefficients and p-vales
+
+d_mig2 <- d_mig %>% mutate(Migration = relevel(Migration, ref = "2"))
+mC2 <- lm(logRS ~ Migration, data = d_mig2)
+summary(mC2)
+
+d_mig3 <- d_mig %>% mutate(Migration = relevel(Migration, ref = "3"))
+mC3 <- lm(logRS ~ Migration, data = d_mig3)
+summary(mC3)
+
+## Post-hoc Tukey HSD
+
+mC_aov <- aov(logRS ~ Migration, data = d_mig)
+tukey_RS <- TukeyHSD(mC_aov, which = "Migration")
+tukey_RS
+plot(tukey_RS)+theme_minimal()
+
+```
+
+#### Step 4
+
+Winnow your original data to just consider birds from the Infraorder “Passeriformes” (song birds).
+
+```{r}
+
+#Filter to Passeriformes; One-Factor ANOVAs for relBeak
+
+pass <- d %>%
+  filter(Order1 == "Passeriformes",
+         !is.na(relBeak),
+         !is.na(Primary.Lifestyle),
+         !is.na(Trophic.Level)
+    
+  )
+
+cat("\nPasseriformes subset:", nrow(pass), "species\n")
+```
+
+```{r}
+
+## Boxplot: relBeak ~ Primary.Lifestyle
+
+ggplot(pass, aes(x = Primary.Lifestyle, y = relBeak, fill = Primary.Lifestyle))+
+  geom_boxplot(alpha = 0.7, outlier.size = 0.7)+
+  labs(
+    title = "Relative Beak Length ~ Primary Lifestyle (Passeriformes)",
+    x = "Primary Lifestyle",
+    y = "Relative Beak Length"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+```{r}
+
+## Boxplot: relBeak ~ Trophic.Level
+
+ggplot(pass, aes(x = Trophic.Level, y = relBeak, fill = Trophic.Level))+
+  geom_boxplot(alpha = 0.7, outlier.size = 0.7)+
+  labs(
+    title = "Relative Beak Length ~ Trophic.Level (Passeriformes)",
+    x = "Trophic.Level",
+    y = "Relative Beak Length"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none",
+        )
+```
+
+```{r}
+
+## Boxplot: relBeak ~ Primary.Lifestyle × Trophic.Level (combination)
+
+ggplot(pass, aes(x = Primary.Lifestyle, y = relBeak, fill = Trophic.Level))+
+  geom_boxplot(alpha = 0.7, outlier.size = 0.5, position=position_dodge(0.8))+
+  labs(
+    title = "Relative Beak Length by Lifestyle x Trophic Level (Passeriformes)",
+    x = "Primary Lifestyle",
+    y = "Relative Beak Length",
+    fill = "Trophic Level"
+  )+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+```{r}
+## relBeak ~ Primary.Lifestyle
+
+mD1<- lm(relBeak ~ Primary.Lifestyle, data = pass)
+summary(mD1)
+
+##relBeak ~ Trophic.Level
+
+mD2<- lm(relBeak ~ Trophic.Level, data = pass)
+summary(mD2)
+```
+
+#### Step 5
+
+Run a two-factor model to look at the association between relative beak length and both **Primary.Lifestyle** and **Trophic.Level** among the passeriforms.
+
+```{r}
+
+#Two-Factor ANOVA (Additive) — relBeak ~ PL + TL
+
+mE <- lm(relBeak ~ Primary.Lifestyle + Trophic.Level, data = pass)
+summary(mE)
+
+```
+
+#### Step 6
+
+Additional two-way model with the same dataset and predictors, but adding the possibility of an interaction term.
+
+```{r}
+
+# Two-Factor ANOVA (With Interaction) through colon operator
+
+mF <- lm(
+  relBeak ~ Primary.Lifestyle + Trophic.Level + Primary.Lifestyle:Trophic.Level,
+  data = pass
+)
+
+summary(mF)
+
+anova(mF)
+
+## Compare model via AIC
+
+AIC(mD1, mD2, mE, mF)
+
+## Conclusion: The nD1 abd nD2 are the most accurate according to the AIC values. It means than using just one predictor we will get a better coefficient than using two. 
+```
+
+#### Step 7
+
+Use the `interaction.plot()` and either the `plot_model()` or `emmip()` function to visualize the interaction between **Primary.Lifestyle** and **Trophic.Level**, based on both \[1\] the raw dataset and \[2\] your model that includes an interaction term.
+
+```{r}
+
+# Interaction Plots
+
+## Base R interaction.plot() — raw dataset group means
+
+interaction.plot(
+  x.factor = pass$Primary.Lifestyle,
+  trace.factor = pass$Trophic.Level,
+  response = pass$relBeak,
+  fun= mean,
+  type= "b",
+  col= c("steelblue", "tomato", "forestgreen", "goldenrod"),
+  pch= 16,
+  lwd= 2,
+  xlab= "Primary Lifestyle",
+  ylab= "Mean Relative Beak Length",
+  main= "Interaction Plot (Raw Means): Lifestyle × Trophic Level",
+  legend= TRUE,
+  trace.label= "Trophic Level"
+)+
+  theme_minimal()
+```
+
+```{r}
+
+## estimated marginal means with CIs
+
+emmip(mF, Trophic.Level ~ Primary.Lifestyle, CIs = TRUE)+
+  labs(
+    title = "Estimated marginal means: Lifestyle x Trophic Level",
+    x = "Primary Lifestyle",
+    y = "EMM of Relative Beak Length"
+  )+theme_minimal()
+```
+
+#### Step 8
+
+Use this approach to see whether variances in across groups in your various models (e.g., for **relative beak length \~ trophic level**) are roughly equal. Additionally, do a visual check of whether observations and model residuals within groups look to be normally distributed.
+
+```{r}
+
+# Checking the assumptions
+
+## Variance homogeneity: maxSD / minSD
+
+### relBeak ~ Trophic.Level
+
+sd_trophic <- pass %>%
+  group_by(Trophic.Level)%>%
+  summarise(n = n(), sd = sd(relBeak, na.rm = TRUE), groups = "drop"
+            )
+print(sd_trophic)
+cat("SD ratio (max/min) ~ Trophic.Level:",
+    round(max(sd_trophic$sd) / min(sd_trophic$sd), 3), "\n")
+
+
+```
+
+```{r}
+
+## relBeak ~ Primary.Lifestyle
+
+sd_lifestyle <- pass%>%
+  group_by(Primary.Lifestyle)%>%
+  summarise(n = n(), sd = sd(relBeak, na.rm = TRUE), groups = "drop")
+print(sd_lifestyle)
+cat("SD ratio (max/min) ~ Primary.Lifestyle:",
+    round(max(sd_lifestyle$sd) / min(sd_lifestyle$sd), 3), "\n")
+```
+
+```{r}
+
+## Levene's test
+
+leveneTest(relBeak ~ Trophic.Level, data = pass)
+leveneTest(relBeak ~ Primary.Lifestyle, data = pass)
+```
+
+```{r}
+
+## Histograms to visualize 
+
+pass%>%
+  filter(!is.na(Trophic.Level)) %>%
+  ggplot(aes(x = relBeak, fill = Trophic.Level))+
+  geom_histogram(bins = 30, color = "white", alpha = 0.8)+
+  facet_wrap(~ Trophic.Level, scales = "free_y")+
+  labs(
+    title = "Distribution of relBeak by Trophic Level",
+    x = "Relative Beak Length",
+    y = "Count"
+  )+
+  theme_minimal()+
+  theme(legend.position = "none")
+
+
+```
+
+```{r}
+
+## QQPlot within Trophic.Level by group
+
+pass %>%
+  filter(!is.na(Trophic.Level)) %>%
+  ggplot(aes(sample = relBeak))+
+  stat_qq()+
+  stat_qq_line(color = "red")+
+  facet_wrap(~ Trophic.Level)+
+  labs(
+    title = "QQ Plot of Relative Beak Length by Trophic Level",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )+
+  theme_minimal()
+  
+
+
+```
+
+```{r}
+
+## Residual diagnostic
+
+par(mfrow = c(2,2))
+plot(mF, main = "Diagnostics: relBeak ~ PL * TL (Passeriformes)")+theme_minimal()
+par(mfrow = c(1,1))
+```
+
+```{r}
+
+## Q-Q plot of model residuals
+
+tibble(res = residuals(mF)) %>%
+  ggplot(aes(sample=res))+
+  stat_qq()+
+  stat_qq_line(color= "red")+
+  labs(
+    title = "Q-Q plot of Residuals - Interaction Model (mF)",
+    x = "Theoretical Quantiles",
+    y = "Residuals"
+  )+
+  theme_minimal()
+
+cat("\n Exercise 10 complete - all Challenges and Steps addressed. \n")
+```
+
+# The end!
+
+All the best,
+
+Janny Mauricio Velasco Alban
